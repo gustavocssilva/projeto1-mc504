@@ -3,117 +3,173 @@
 #include<unistd.h>
 #include<semaphore.h>
 #include<time.h>
+#include"animation.h"
 
-#define PASSANGER_CAP 20;
+/*
+    MC504 - O Problema do Tour da UPA
+    Feito por: Gustavo Costa Salles Silva, R.A.: 198487
+    Solução inspirada no Roller Coaster problem do "The Little Book of Semaphores"
+*/
 
-/* Universal Variables */
-sem_t boardQueue;
-sem_t allAboard;
-sem_t unboardQueue;
-sem_t allAshore;
+/*--------------------------------------- Universal Variables ---------------------------------------*/
 
-pthread_mutex_t mutex1;
-pthread_mutex_t mutex2;
+sem_t boardQueue;                       // semáforo de pessoas embarcadas no onibus
+sem_t allAboard;                        // semáforo que avisa que todos embarcaram
+sem_t unboardQueue;                     // semáforo de pessoas desembarcando do onibus
+sem_t allAshore;                        // semáforo que avisa que todos desbarcaram
 
-size_t busCap = 5;
+pthread_mutex_t mutex1;                 // mutex que impede que mais de um passageiro suba por vez 
+pthread_mutex_t mutex2;                 // mutex que impede que mais de um passageiro desca por vez
 
-volatile int totalPassangers;
-volatile int leftPassangers;
-volatile int boarders = 0;
-volatile int unboarders = 0;
+size_t passangerCap = 15;               // capacidade máxima de passageiros, não alterar acima de 15
+size_t busCap = 5;                      // capacidade máxima do onibus
 
-/* bus */
+volatile int totalPassangers;           // total de passageiros
+volatile int remainingPassangers;       // passageiros restantes para viajar
+volatile int boarders = 0;              // passageiros que subiram no onibus
+volatile int unboarders = 0;            // passageiros que desceram do onibus
+
+/*----------------------------------------------- Bus ----------------------------------------------*/
+
+// load(): incrementa o semaforo boardQueue até encher o onibus
 void load() {
-    printf("[Bus thread] bus is loading.\n");
-    sleep(1);
+    cleanScreen();
+    printf("[Bus thread] o onibus está carregando os passageiros.\n");
+    printOverview(remainingPassangers, 0);
+    sleep(2);
+
+    for(int i = 0; i < busCap; i++) sem_post(&boardQueue);
+
 }
 
+// unload(): incrementa o semaforo unboardQueue até envaziar o onibus
 void unload() {
-    printf("[Bus thread] bus is unloading.\n");
-    sleep(1);
+    cleanScreen();
+    printf("[Bus thread] o onibus está descarregando os passageiros.\n");
+    printOverview(remainingPassangers, 0);
+    sleep(2);
+    
+    for(int i = 0; i < busCap; i++) sem_post(&unboardQueue);
+
 }
 
+// run(): apenas faz a animação do onibus rodando
 void run() {
-    printf("[Bus thread] bus is running.\n");
+    for(int i = 0; i <= 7; i++){
+        cleanScreen();
+        printf("[Bus thread] o onibus está rodando.\n");
+        printOverview(remainingPassangers, i);
+        sleep(2);
+    }
 }
 
+// busThread(): thread do onibus que recebe os passageiros
 void* busThread() {
-
-    while(leftPassangers > 0){    
-        
-        if(leftPassangers < busCap) {
-            printf("[bus thread] no more trips for today, %d left out. :(\n", leftPassangers);
-            return NULL;
-        }
+    while(remainingPassangers >= busCap){    
         
         load();
-
-        for(int i = 0; i < busCap; i++) sem_post(&boardQueue);
-
-        sem_wait(&allAboard);
+        
+        sem_wait(&allAboard);           // espera pelo allAboard
 
         run();
 
         unload();
 
-        for(int i = 0; i < busCap; i++) sem_post(&unboardQueue);
+        sem_wait(&allAshore);           // espera pelo allAshore
+    }
 
-        sem_wait(&allAshore);
-    
-        leftPassangers -= busCap;
+    // caso o número de passageiros que sobraram for menor que a capacidade do onibus, eles não viajarao
+    if(remainingPassangers > 0) {
+        cleanScreen();
+        printf("[bus thread] acabaram as viagens por hoje, %d pessoas ficaram de fora. :(\n", remainingPassangers);
+        printOverview(remainingPassangers, 0);
     }
 }
 
 
 
-/* Passanger */
+/*--------------------------------------------- Passanger --------------------------------------------*/
+
+// board(): adiciona passageiros no onibus até encher e incrementa allAboard
 void board() {
-    printf("[Passanger thread] passanger is boarding.\n");
-    sleep(1);
-}
-
-void unboard() {
-    printf("[Passanger thread] passanger is unboarding.\n");
-    sleep(1);
-}
-
-void* passangerThread() {
-    sem_wait(&boardQueue);
-
-    pthread_mutex_lock(&mutex1); 
-    
-    board(); 
+    cleanScreen();
+   
     boarders++;
+
+    printf("[Passanger thread] passageiro %d está subindo no onibus.\n", boarders);
+    
+    remainingPassangers--;
+    printOverview(remainingPassangers,0);
+    
+    sleep(1);
 
     if (boarders == busCap) {
         sem_post(&allAboard);
         boarders = 0;
     }
-    
-    pthread_mutex_unlock(&mutex1);
-    
-    sem_wait(&unboardQueue);
+}
 
-    pthread_mutex_lock(&mutex2);
-
-    unboard();
+// unboard(): desce os passageiros do onibus até esvaziar e incrementa allAshore
+void unboard() {
+    cleanScreen();
+  
     unboarders++; 
+
+    printf("[Passanger thread] passageiro %d está descendo do onibus.\n", unboarders);
+    
+    printOverview(remainingPassangers,0);
+    
+    sleep(1);
     
     if (unboarders == busCap) {
         sem_post(&allAshore);
         unboarders = 0;
     }
-
-    pthread_mutex_unlock(&mutex2);
 }
 
-int main(int argc, char const *argv[]) {
-    totalPassangers = 6;
-    leftPassangers = totalPassangers;
+// passangerThread(): thread dos passageiros
+void* passangerThread() {
+    sem_wait(&boardQueue);              // espera o onibus comecar a encher
 
+    pthread_mutex_lock(&mutex1);        // impede que mais de um suba por vez
+    
+    board(); 
+    
+    pthread_mutex_unlock(&mutex1);      // permite que o proximo suba
+    
+    sem_wait(&unboardQueue);            // espera o onubus comecar a desembarcar os passageiros
+
+    pthread_mutex_lock(&mutex2);        // impede que mais de um desembarque por vez
+
+    unboard();
+
+    pthread_mutex_unlock(&mutex2);      // permite que o proximo desembarque
+}
+
+/*----------------------------------------------- Main ----------------------------------------------*/
+
+int main(int argc, char const *argv[]) {
+
+    // recebe os passageiros, respeitando o limite
+    while(1) {
+        cleanScreen();
+        printf("Quantos passageiros tem na fila hoje? ");
+        scanf("%d", &totalPassangers);
+
+        if(totalPassangers > passangerCap) {
+            printf("O limite da fila é de %d passageiros, insira outro valor!\n", passangerCap);
+            sleep(4);
+        }
+        else break;
+    }
+
+    remainingPassangers = totalPassangers;
+
+    // cria os mutex usados nos passangerThread
     pthread_mutex_init(&mutex1, NULL);
     pthread_mutex_init(&mutex2, NULL);
 
+    // inicializa os semaforos
     sem_init(&boardQueue, 0, 0);
     sem_init(&allAboard, 0, 0);
     sem_init(&unboardQueue, 0, 0);
